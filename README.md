@@ -38,6 +38,13 @@ A complete video solution.. which means there is no security features , user sig
 
 The project source is a great collection for those who build the functions like the thumbnail-er , Video capturing and the video streaming and Flex phpamf gateways and so on.
 
+## Warning.
+
+This is an old project of mine which was nearly dead on the Google code. I brought it to github just for historical purpose.
+
+This might still work if you get your server working on Red 5 v0.8  or anything under 1.0 however you have to test it and Please give me a pull request if you have updated this .
+
+
 For simple Questions or for hiring us do contact :
 
 ## Need Support?
