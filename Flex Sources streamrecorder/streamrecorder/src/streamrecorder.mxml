@@ -1,0 +1,432 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- http://blog.flexexamples.com/2007/09/21/uploading-files-in-flex-using-the-filereference-class/ -->
+<mx:Application xmlns:mx="http://www.adobe.com/2006/mxml"
+				xmlns:s="library://ns.adobe.com/flex/spark"
+				layout="absolute"
+				verticalAlign="middle"
+				backgroundColor="white"
+				creationComplete="init();" width="640" height="872">
+	
+	<mx:Script>
+		<![CDATA[
+			import com.adobe.images.JPGEncoder;
+			
+			import flash.display.*;
+			import flash.display.MovieClip;
+			import flash.display.SimpleButton;
+			import flash.events.AsyncErrorEvent;
+			import flash.events.NetStatusEvent;
+			import flash.media.Camera;
+			import flash.media.Microphone;
+			import flash.media.Video;
+			import flash.net.NetConnection;
+			import flash.net.NetStream;
+			import flash.net.Responder;
+			import flash.system.Security;
+			import flash.system.SecurityDomain;
+			import flash.text.*;
+			import flash.utils.getTimer;
+			
+			import mx.controls.Alert;
+			import mx.core.IUIComponent;
+			import mx.events.CloseEvent;
+			import mx.events.SliderEvent;
+			import mx.graphics.ImageSnapshot;
+			import mx.utils.Base64Encoder;
+			
+			private var user:String="";
+			private var fileRef:FileReference;
+			private var camera:Camera;
+			private var mic:Microphone;
+			private var nc:NetConnection;	
+			private var responder:Responder;
+			private var ns:NetStream;
+			private var gateway:RemotingConnection;
+			
+			private var siteScreenBitmapData:BitmapData ;
+			private var jec:JPGEncoder ;
+			private var ba:ByteArray;
+			 
+			private var FILE_UPLOAD_URL:String = "";
+			private var FILE_CONVERT_URL:String = "";
+			private var THUMB_GRAB_URL:String = "";
+			private var LIVE_VIEWING_URL:String = "";
+			private var userfiles_url:String;
+			private var serverUrl:String;
+			
+			private var resolutions:Array;
+			
+			
+			[Bindable]
+			private var is_recording:Boolean;
+			[Bindable]
+			private var arr:Array;
+			
+			private function init():void 
+			{
+				user = this.parameters.user;
+				if(!user){
+					user = "Guest";
+				}
+				
+				FILE_UPLOAD_URL = this.parameters.uploadscript + "upload.php";
+				FILE_CONVERT_URL = this.parameters.uploadscript + "convert.php";
+				THUMB_GRAB_URL = this.parameters.uploadscript + "grab.php";
+				LIVE_VIEWING_URL = this.parameters.uploadscript + "view.php";
+				userfiles_url = this.parameters.uploadscript + "/files/" + user + "/"
+				serverUrl = this.parameters.rtmpserver;
+					
+				volumeSlider.addEventListener(SliderEvent.CHANGE, handleRecoredVolumeChange);
+				Resolution.addEventListener(Event.CHANGE, handleResolutionChange);
+					
+				//Connect to the FMS/ Red5
+				nc = new NetConnection();
+				nc.connect(serverUrl + "/" + user);
+				nc.addEventListener(NetStatusEvent.NET_STATUS, netStatusHandler);
+				
+				fileRef = new FileReference();
+				fileRef.addEventListener(Event.SELECT, fileRef_select);
+				fileRef.addEventListener(ProgressEvent.PROGRESS, fileRef_progress);
+				fileRef.addEventListener(Event.COMPLETE, fileRef_complete);
+				
+				resolutions = new Array();
+				resolutions[0] = new Array(320,240);
+				resolutions[1] = new Array(640,480);
+				resolutions[2] = new Array(1024,720);
+				resolutions[3] = new Array(1980,1080);
+				
+				
+				gateway = new RemotingConnection( this.parameters.uploadscript + "/amfphp/gateway.php" );
+				refreshfiles();
+				videocanvas.visible = false;
+			}
+			
+			private function netStatusHandler(e:NetStatusEvent):void  {   
+				var code:String = e.info.code;   
+				trace(code);  
+				if(code == "NetConnection.Connect.Success"){ 
+					ns = new NetStream(nc);   
+					publishCam();
+					statuslabel.text = "RTMP Server Connected";
+				}   
+			} 
+			
+			
+			private function handleRecoredVolumeChange(e:SliderEvent):void
+			{
+				if(mic){
+					mic.gain = volumeSlider.value;
+				}
+			}
+			
+			private function handleResolutionChange(e:Event):void
+			{
+				trace(Resolution.selectedValue);
+				var a:Array = resolutions[Resolution.selectedValue];
+				if(camera){
+					camera.setMode(a[0], a[1], 15);
+					sendMeta();
+				}
+				
+				trace(camera.width, camera.height);
+			}
+			
+			private function sendMeta():void
+			{
+				if(camera){
+					var metaData:Object = new Object();
+					metaData.width = camera.width;
+					metaData.height = camera.height;
+					ns.send("@setDataFrame", "onMetaData", metaData);
+				}
+			}
+			
+	
+			private function publishCam():void
+			{
+				var cams:Array = Camera.names;
+				if(0 == cams.length){
+					Alert.show("You don't seem to have a camera.");
+					return;
+				}
+				
+				//有多个摄像头设备
+				if(cams.length>1){
+					Security.showSettings(SecurityPanel.CAMERA);
+				}
+				camera = Camera.getCamera();
+				camera.setMode(resolutions[Resolution.selectedValue][0],resolutions[Resolution.selectedValue][1], 30);
+				camera.setQuality(0, video_quality.value);
+				
+				mic = Microphone.getMicrophone();
+				mic.rate = volumeSlider.value;
+				
+				videoDisplay.attachCamera(camera);
+				ns.attachCamera(camera);
+				ns.attachAudio(mic);
+			}
+			
+			private function golive():void
+			{			
+				if(golivebtn.selected)
+				{
+					liveurl.text = LIVE_VIEWING_URL + "?user=" + user +"&filename=" + video_name.text;
+					if(is_recording){
+						startRecording();
+					}else{
+						ns.publish(video_name.text, "live");	
+						sendMeta();
+					}
+				}
+				else
+				{
+					liveurl.text = "";
+					ns.close();
+				}
+			}
+			
+			private function startRecording():void
+			{
+				var mode:String;
+				if (can_append.selected==true){
+					mode="append";
+				}else{
+					mode="record";
+				}
+				ns.publish(video_name.text, mode);	
+				is_recording = true;
+			}
+			
+			private function stopRecording():void
+			{
+				is_recording = false;
+				golive();
+//				ns.publish(video_name.text, "live");	
+			}
+			
+			private function changeButton():void
+			{
+				if (button.label == 'Record'){
+					button.label = 'Stop';
+					startRecording();
+				} else {
+					button.label = 'Record';
+					stopRecording();
+				}	
+			}
+
+			
+			private function browseAndUpload():void {
+				fileRef.browse();
+				message.text = "";
+			}
+			
+			private function fileRef_select(evt:Event):void {
+				
+				try {
+					message.text = "size (bytes): " + numberFormatter.format(fileRef.size);
+					FILE_UPLOAD_URL += "?user="+user + "&quality=" + video_quality.value + "&resolution=" + resolutions[Resolution.selectedValue][0]+"x"+resolutions[Resolution.selectedValue][1];
+					fileRef.upload(new URLRequest(FILE_UPLOAD_URL));
+				} catch (err:Error) {
+					message.text = "ERROR: zero-byte file";
+				}
+			}
+			
+			private function fileRef_progress(evt:ProgressEvent):void {
+				progressBar.visible = true;
+			}
+			
+			private function fileRef_complete(evt:Event):void {
+				message.text += " (upload complete)";
+				progressBar.visible = false;
+			}
+			
+			private function video_name_click():void
+			{
+				if (video_name.text == "Enter video name..")
+					{
+					video_name.text = "";
+					}
+			}
+			
+			private function refreshfiles():void
+			{
+				gateway.call( "Files.getList", new Responder(onlistResult, onFault),user);
+			}
+			
+			
+			public function onlistResult( result : Array ) : void
+			{
+				arr = result;
+				
+			}
+			public function onFault( fault : String ) : void
+			{
+				
+				//Alert.show(fault);
+			}
+			
+			public function playvid():void
+			{
+				videocanvas.visible= true;
+				videocanvas.top=312;
+				filelistcanvas.visible=false;
+				
+				//video.source = this.parameters.rtmpserver + "/" + user + "/" + fileslist.selectedItem.name;
+				video.source = userfiles_url + fileslist.selectedItem.name;
+				//Alert.show(video.source);
+				video.play();
+				
+				tstatus.text = "Waiting for user action..";
+				preview.source = userfiles_url + fileslist.selectedItem.name + ".jpg?"+Math.random();
+				
+			}
+			
+			public function thumbnail():void
+			{
+				takeSnapshot(video.videoDisplay);
+			}
+			
+			private function takeSnapshot(source:IBitmapDrawable):void {
+				
+				 siteScreenBitmapData = ImageSnapshot.captureBitmapData(source);
+				
+				 jec = new JPGEncoder(100);
+				 ba = jec.encode(siteScreenBitmapData);
+				
+				preview.autoLoad=true;
+				preview.source = ba;
+								
+				
+			}
+			
+			private function send_thumbnail():void
+			{
+			
+				
+				//Recapture from the Image 
+				siteScreenBitmapData = ImageSnapshot.captureBitmapData(preview);
+				ba = jec.encode(siteScreenBitmapData);
+				
+				var coder:Base64Encoder = new Base64Encoder();
+				coder.encodeBytes(ba , 0 , ba.length);
+				
+				//txt.text = coder.toString();
+				var req : URLRequest = new URLRequest(THUMB_GRAB_URL);
+				
+				
+				
+				var variables:URLVariables = new URLVariables();
+				variables.fdata = coder.toString();
+				variables.filename =  fileslist.selectedItem.name 
+				variables.user = user;
+				req.data =  variables
+				req.method = URLRequestMethod.POST;
+				var loader : URLLoader = new URLLoader(req);
+				
+				//Here assign corresponding listeners to loader
+				
+				loader.load(req);
+				tstatus.text = "Thumbnail Uploaded to Server"; 
+				
+			
+			}
+			
+			
+			private function filelist_change():void
+			{
+				thumbnail_prev.source = userfiles_url + fileslist.selectedItem.name + ".jpg?" + Math.random();
+			}
+			
+			private function delete_file():void
+			{
+				
+				//Alert.yesButton="Delete";
+				//Alert.noButton="Cancel";
+				Alert.show(
+					"Are you sure you want to delete this file?", 
+					"Delete", 
+					Alert.YES|Alert.NO, 
+					this, 
+					function(event:CloseEvent):void{
+						if (event.detail==Alert.YES)
+						{
+							gateway.call( "Files.deleteFile", new Responder(onlistResult, onFault),user,fileslist.selectedItem.name);
+							refreshfiles();
+						}
+					}
+				); 
+
+				
+				
+			}
+			
+			
+			public function webcamParameters():void {
+				Security.showSettings(SecurityPanel.DEFAULT);
+			}
+			
+		]]>
+	</mx:Script>
+
+	<mx:NumberFormatter id="numberFormatter" />
+	<mx:Canvas x="0" y="-1" width="640" height="317" id="record_canvas">
+		<mx:Button y="293" icon="@Embed('assets/webcamON.png')" height="18" width="35"
+				   id="cam1_btn" click="webcamParameters()" toolTip="Parameters" label="1" x="10"/>
+		<mx:VideoDisplay id="videoDisplay" maintainAspectRatio="true" width="320" height="240"  x="0" y="0"/>
+		<mx:Button id="button"
+				   label="Record"
+				   click="changeButton();"  x="181" y="286"/>
+		<mx:Label x="0" y="240" text="Status :"/>
+		<mx:Label x="46" y="240" text="Initializing.." id="statuslabel" />
+		<mx:Label x="196" y="211" text="Recording........" visible="{is_recording}" width="123" id="recordingstatus" fontFamily="Times New Roman" fontSize="20" color="#49D17F"/>
+		<mx:TextInput x="72" y="261" width="179" id="video_name" change="golive()" click="video_name_click()" text="Enter video name.."/>
+		<mx:Label x="2" y="265" text="Video name"/>
+		<mx:CheckBox x="256" y="258" label="Append" height="23" id="can_append" selected="false"/>
+		<mx:VSlider x="342" y="26" minimum="0" maximum="100" value="80"  id="video_quality"/>
+		<mx:VSlider x="390" y="26" minimum="0" maximum="100" value="80"  id="volumeSlider"/>
+		<mx:Label x="328" y="10" text="Quality"/>
+		<mx:Label x="382" y="10" text="Volume"/>
+		<mx:RadioButtonGroup id="Resolution"/>
+		
+		<mx:RadioButton x="473" y="32" label="Basic 320x240" groupName="Resolution" selected="false" value="0" />
+		<mx:RadioButton x="473" y="57" label="Standard 640x480" groupName="Resolution" selected="true" value="1" />
+		<mx:RadioButton x="473" y="82" label="HD 720p" groupName="Resolution" value="2" />
+		<mx:RadioButton x="473" y="108" label="HD 1080p" groupName="Resolution" value="3" />
+		<mx:Label x="454" y="10" text="Video Resolution"/>
+		<mx:Button label="Upload file"
+				   click="browseAndUpload();"  x="533" y="144"/>
+		<mx:Label id="message"  x="375" y="193"/>
+		<mx:ProgressBar id="progressBar"
+						indeterminate="true"
+						visible="false"  x="403" y="167" height="30"/>
+		<mx:CheckBox x="328" y="223" label="Go Live!" id="golivebtn" click="golive()" />
+		<mx:TextInput x="329" y="283" width="306" id="liveurl"/>
+		<mx:Label x="328" y="258" text="Live Video Viewing url"/>
+		<mx:Label x="50" y="292" text="Cam/Mic Settings"/>
+	</mx:Canvas>
+	<mx:Canvas x="1" y="321" width="639" height="286" id="filelistcanvas">
+		<mx:Button x="496" y="10" label="Refresh File List" id="refresh" click="refreshfiles()" width="137"/>
+		<mx:TileList id="fileslist" x="10" y="10" width="408" dataProvider="{arr}" change="filelist_change()"  labelField="name" height="266"  columnWidth="70"></mx:TileList>
+		<mx:Button x="496" y="41" label="Preview &amp; Thumbnail" click="playvid()"  width="136"/>
+		<mx:Button x="496" y="71" label="Delete File" click="delete_file()"  width="136"/>
+		<mx:Image x="430" y="126" width="200" height="150" id="thumbnail_prev"/>
+
+	</mx:Canvas>
+	<mx:Canvas x="-1" y="615" width="640" height="257" id="videocanvas" backgroundColor="#FFFFFF">
+		<s:VideoPlayer  id="video"
+		
+			horizontalCenter="-170"
+			verticalCenter="-22"
+			autoPlay="true"  width="296" height="214" pauseWhenHidden="true"/>
+		<mx:Button x="511" y="51" label="Capture Thumbnail" width="126" height="39" click="thumbnail()"/>
+		<mx:Image x="305" y="4" width="200" height="150" id="preview"/>
+		<mx:Label x="306" y="175" text="Status:"/>
+		<mx:Label x="308" y="197" width="298" id="tstatus"/>
+		<mx:Button x="510" y="99" label="Send to Server" click="send_thumbnail()" width="128" height="33"/>
+		<mx:Label x="604" y="-2" text="X" click="videocanvas.visible=false;filelistcanvas.visible=true;" fontSize="36" fontWeight="bold" width="36"/>
+
+
+	</mx:Canvas>
+
+</mx:Application>

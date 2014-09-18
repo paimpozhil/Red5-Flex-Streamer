@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:Application xmlns:mx="http://www.adobe.com/2006/mxml"
+				layout="absolute"
+				verticalAlign="middle"
+				backgroundColor="white"
+				creationComplete="init();" width="1024" height="768">
+	
+	
+	<mx:Script>
+		<![CDATA[ 
+			import flash.display.*;
+			import flash.display.MovieClip;
+			import flash.display.SimpleButton;
+			import flash.events.AsyncErrorEvent;
+			import flash.events.NetStatusEvent;
+			import flash.media.Camera;
+			import flash.media.Microphone;
+			import flash.media.Video;
+			import flash.net.NetConnection;
+			import flash.net.NetStream;
+			import flash.net.Responder;
+			import flash.system.Security;
+			import flash.system.SecurityDomain;
+			import flash.text.*;
+			
+			import mx.containers.VDividedBox;
+			import mx.controls.Alert;
+			import mx.core.UIComponent;
+			import mx.events.SliderEvent;
+			
+			private var user:String="";
+			private var filename:String;
+			private var serverUrl:String;
+			private var fileRef:FileReference;
+			private var camera:Camera = Camera.getCamera();
+			private var mic:Microphone = Microphone.getMicrophone();
+			private var nc:NetConnection;	
+			private var ns:NetStream;
+			private var responder:Responder;
+			
+			private var gateway:RemotingConnection;
+			private var vContainer:UIComponent; 
+			
+			private var FILE_UPLOAD_URL:String = "";
+			private var FILE_CONVERT_URL:String = "";
+			private var resolutions:Array;
+			private var vid:Video;
+			
+			
+			[Bindable]
+			private var is_recording:Boolean;
+			[Bindable]
+			private var arr:Array;
+			
+			
+			private function init():void 
+			{
+				vContainer = new UIComponent();
+				addChild(vContainer);
+				vid = new Video(320, 240);
+				vContainer.addChild(vid);
+				
+				volumeSlider.addEventListener(SliderEvent.CHANGE, handleRecoredVolumeChange);
+				
+				user = this.parameters.user;
+				if(!user){
+					user = "Guest";
+				}
+				filename = this.parameters.filename;
+//				filename = "rr";
+				
+				serverUrl = this.parameters.rtmpserver;
+				
+				nc = new NetConnection();
+				nc.connect(serverUrl + "/" + user);
+				nc.addEventListener(NetStatusEvent.NET_STATUS,onNetStatus);
+				resolutions = new Array();
+				resolutions[0] = new Array(320,240);
+				resolutions[1] = new Array(640,480);
+				resolutions[2] = new Array(1024,720);
+				resolutions[3] = new Array(1980,1080);
+			}
+			
+			
+			private function handleRecoredVolumeChange(e:SliderEvent):void
+			{
+				if(ns){
+					ns.soundTransform = new SoundTransform(volumeSlider.value/100);
+				}
+			}
+			
+		
+			private function onNetStatus(event:NetStatusEvent):void
+			{ 
+				trace(event.info.code);	 
+			
+				if (event.info.code == "NetConnection.Connect.Success") {
+					status.text="Connnected to Server";
+					
+					ns = new NetStream(nc);
+					ns.client = {};
+					ns.client.myFunction = myFunction;
+					ns.client.onMetaData = ns_onMetaData;
+					ns.client.onCuePoint = ns_onCuePoint;
+					ns.addEventListener(NetStatusEvent.NET_STATUS, handleStreamStatus);
+					ns.addEventListener(AsyncErrorEvent.ASYNC_ERROR, asyncErrorHandler);
+					ns.play(filename);
+					
+					vid.attachNetStream(ns);
+					handleRecoredVolumeChange(null);
+				}
+			}  
+			
+			private function asyncErrorHandler(event:AsyncErrorEvent):void 
+			{ trace(event.text); 
+			} 
+			
+			private function handleStreamStatus(e:NetStatusEvent):void
+			{
+				trace(e.info.code);	 
+			}
+			
+			private function myFunction(s:String):void
+			{
+				trace(s);
+			}
+			
+			private function ns_onMetaData(item:Object):void 
+			{
+				trace("metaData");
+				
+				for(var k:* in item)
+				{
+					trace(k, item[k]);
+				}
+				
+				resizeVideo(item.width, item.height);
+				
+				// Resize video instance.
+//				video.width = item.width;
+//				video.height = item.height;
+				// Center video instance on Stage.
+//				video.x = (stage.stageWidth - video.width) / 2;
+//				video.y = (stage.stageHeight - video.height) / 2;
+			}
+			
+			private function resizeVideo(w:uint, h:uint):void
+			{
+				vid.width = w;
+				vid.height = h;
+				controls.x = 10;
+				controls.y = vid.y + vid.height + 10;
+				trace(controls.y, controls.x);
+			}
+			
+			private function ns_onCuePoint(item:Object):void 
+			{
+				trace("cuePoint");
+				trace(item.name + "\t" + item.time);
+			}
+			
+			
+		]]>
+	</mx:Script>
+	<mx:VBox id="controls" x="10" y="270" width="410" height="94">
+		<mx:HBox width="230" height="24">
+			<mx:Label height="27" text="volume"/>
+			<mx:HSlider id="volumeSlider" maximum="100" minimum="0" value="80"/>
+		</mx:HBox>
+		<mx:Button id="reset" label="Restart" click="init()"/>
+		<mx:HBox width="348">
+			<mx:Label width="48" text="Status:"/>
+			<mx:Label id="status" width="148" text="Connecting"/>
+		</mx:HBox>
+	</mx:VBox>
+	
+	
+
+</mx:Application>

@@ -1,0 +1,8 @@
+Array
+(
+    [user] => Guest
+    [quality] => 80
+    [resolution] => 320x240
+    [Filename] => roving_web.wmv
+    [Upload] => Submit Query
+)
